@@ -4,9 +4,14 @@ const { joinVoiceChannel } = require('@discordjs/voice');
 require('dotenv').config(); // .env dosyasındaki değişkenleri yükler
 
 // Yeni bir client (istemci) oluşturuyoruz
+// ÖNCEKİ HATAYI GİDERMEK İÇİN "ws" KISMI EKLENDİ
 const client = new Client({
-  // Kütüphane güncelleme kontrolünü kapatmak, hataları önleyebilir
   checkUpdate: false,
+  ws: {
+    properties: {
+      browser: "Discord Client",
+    },
+  },
 });
 
 // Bot hazır olduğunda çalışacak olan kod
