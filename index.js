@@ -1,89 +1,101 @@
-// Gerekli kütüphaneleri dahil ediyoruz
+// UZUN SÜRELİ STABİLİTE İÇİN GELİŞTİRİLMİŞ KOD
+const http = require('http');
 const { Client } = require('discord.js-self');
 require('dotenv').config();
 
-// Yeni bir client (istemci) oluşturuyoruz
 const client = new Client();
-
-// YENİ: Ses bağlantısını saklamak için bir değişken oluşturuyoruz
 let voiceConnection = null;
-const RECONNECT_DELAY = 10000; // 10 saniye
-const STAY_ALIVE_INTERVAL = 240000; // 4 dakika (milisaniye cinsinden)
+const RECONNECT_DELAY = 15000; // Yeniden bağlanma bekleme süresini 15 saniyeye çıkardık
 
-// Bot hazır olduğunda çalışacak olan kod
+// --- YENİ: Daha "insansı" zamanlama için ---
+// Her 3 ila 5 dakika arasında rastgele bir zamanda "aktif kalma" sinyali gönderir.
+function getRandomStayAliveInterval() {
+  const min = 3 * 60 * 1000; // 3 dakika
+  const max = 5 * 60 * 1000; // 5 dakika
+  return Math.floor(Math.random() * (max - min + 1) + min);
+}
+
 client.on('ready', async () => {
   console.log(`✅ ${client.user.username} olarak giriş yapıldı!`);
-  console.log('Ses kanalına bağlanılıyor...');
-  await joinChannel(); // İlk bağlantının tamamlanmasını bekle
-
-  // YENİ: Bota aktif kalması için periyodik sinyal gönderme işlemini başlat
-  if (voiceConnection) {
-    setInterval(stayActive, STAY_ALIVE_INTERVAL);
-    console.log(`📢 "Aktif Kalma" döngüsü her ${STAY_ALIVE_INTERVAL / 60000} dakikada bir çalışacak şekilde ayarlandı.`);
-  }
+  await joinChannel();
+  // İlk "aktif kalma" kontrolünü rastgele bir süre sonra başlat
+  setTimeout(stayActive, getRandomStayAliveInterval());
 });
 
-// Otomatik yeniden bağlanma mantığı
 client.on('voiceStateUpdate', (oldState, newState) => {
   if (oldState.id === client.user.id && oldState.channelID && !newState.channelID) {
-    console.log(`⚠️ Ses kanalından bağlantı koptu. ${RECONNECT_DELAY / 1000} saniye içinde yeniden bağlanılıyor...`);
-    voiceConnection = null; // Bağlantı koptuğu için değişkeni sıfırla
+    console.log(`⚠️ Ses kanalından bağlantı koptu. Olay algılandı, yeniden bağlanılıyor...`);
+    voiceConnection = null;
     setTimeout(joinChannel, RECONNECT_DELAY);
   }
 });
 
-// Ses kanalına bağlanma fonksiyonu
 async function joinChannel() {
-  const voiceChannelId = process.env.VOICE_CHANNEL_ID;
-
-  if (!voiceChannelId) {
-    console.error("❌ HATA: .env dosyasında VOICE_CHANNEL_ID değişkeni bulunamadı!");
-    return;
-  }
-
-  try {
-    const channel = await client.channels.fetch(voiceChannelId);
-    if (channel && channel.type === 'voice') {
-      // YENİ: Bağlantıyı değişkene ata
-      voiceConnection = await channel.join();
-      console.log(`🎧 Başarıyla "${channel.name}" adlı ses kanalına bağlanıldı!`);
-    } else {
-      console.error(`❌ HATA: "${voiceChannelId}" ID'li bir ses kanalı bulunamadı veya bu bir ses kanalı değil.`);
-    }
-  } catch (error) {
-    console.error("❌ Ses kanalına bağlanırken bir hata oluştu:", error.message);
-  }
-}
-
-// YENİ: Botun aktif olduğunu bildiren fonksiyon
-function stayActive() {
-  if (!voiceConnection) {
-    console.log('📢 "Aktif Kalma" sinyali gönderilemedi: Ses bağlantısı yok.');
+  // Eğer zaten bağlıysak tekrar denemeye gerek yok
+  if (voiceConnection && voiceConnection.channel) {
+    console.log(`ℹ️ Zaten bir kanalda. Yeniden bağlanma işlemi atlandı.`);
     return;
   }
   
+  console.log(`🔗 Ses kanalına bağlanma deneniyor...`);
+  const voiceChannelId = process.env.VOICE_CHANNEL_ID;
+  if (!voiceChannelId) return console.error("❌ HATA: VOICE_CHANNEL_ID ortam değişkeni bulunamadı!");
+  
   try {
-    // Çok kısa bir süreliğine konuşuyor gibi yapıp hemen susturuyoruz.
-    // Bu, Discord'a "aktif" olduğumuzu bildirir.
-    voiceConnection.setSpeaking(true);
-    setTimeout(() => {
-      voiceConnection.setSpeaking(false);
-    }, 500); // Yarım saniye sonra sus
+    const channel = await client.channels.fetch(voiceChannelId);
+    if (channel && channel.type === 'voice') {
+      voiceConnection = await channel.join();
+      console.log(`🎧 "${channel.name}" kanalına başarıyla bağlandı!`);
+    } else {
+      console.error(`❌ HATA: Kanal bulunamadı veya bu bir ses kanalı değil.`);
+    }
   } catch (error) {
-    console.error('📢 "Aktif Kalma" sinyali gönderilirken hata oluştu:', error.message);
+    console.error(`❌ Bağlanma hatası:`, error.message);
+    // Başarısız olursa bir süre sonra tekrar dene
+    setTimeout(joinChannel, RECONNECT_DELAY);
   }
 }
 
-// .env dosyasından token'ı al ve bota giriş yap
-const token = process.env.TOKEN;
-if (!token) {
-  console.error("❌ HATA: .env dosyasında TOKEN değişkeni bulunamadı!");
-} else {
-  client.login(token);
+// --- YENİ: Kendi kendini kontrol eden ve iyileştiren "Aktif Kalma" fonksiyonu ---
+async function stayActive() {
+  // 1. Bağlantı var mı diye kontrol et
+  if (!voiceConnection || !voiceConnection.channel) {
+    console.log(`📢 Aktif Kalma Kontrolü: Bağlantı kopuk görünüyor. Yeniden bağlanma tetikleniyor.`);
+    await joinChannel();
+  } else {
+    // 2. Bağlantı varsa, "konuşuyor" sinyali gönder
+    try {
+      console.log(`📢 Aktif Kalma Kontrolü: Bağlantı yerinde. "Konuşuyor" sinyali gönderiliyor.`);
+      voiceConnection.setSpeaking(true);
+      setTimeout(() => {
+        if (voiceConnection) voiceConnection.setSpeaking(false);
+      }, 500);
+    } catch (error) {
+      console.error(`📢 'Aktif Kalma' sinyali hatası:`, error.message);
+    }
+  }
+  
+  // 3. Bir sonraki kontrol için tekrar rastgele bir zamanlayıcı kur
+  setTimeout(stayActive, getRandomStayAliveInterval());
 }
 
-// Uptime için basit bir web sunucusu
-const http = require('http');
+const token = process.env.TOKEN;
+if (!token) {
+  console.error("❌ HATA: TOKEN ortam değişkeni bulunamadı!");
+} else {
+  client.login(token).catch(err => {
+    console.error("❌ Giriş yapılamadı! Token geçersiz olabilir. Hata:", err.message);
+  });
+}
+
+// Olası çökmeleri yakalamak için eklenen güvenlik önlemleri
+process.on('unhandledRejection', error => {
+  console.error('❌ YAKALANAMAYAN HATA (unhandledRejection):', error);
+});
+process.on('uncaughtException', error => {
+  console.error('❌ YAKALANAMAYAN HATA (uncaughtException):', error);
+});
+
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Bot aktif ve seste!');
